@@ -7,9 +7,12 @@ Composes:
   - :class:`HeliosClient` (HMAC-signed GET)
   - :class:`PermissionClient` (the cache-first authz decision surface)
 
-Caller injects the Redis connection (we don't own the connection
-lifecycle) and the logger (stdlib ``logging.Logger`` satisfies the
-protocol).
+Caller injects:
+
+  - The Redis connection (we don't own the connection lifecycle)
+  - The logger (stdlib ``logging.Logger`` satisfies the protocol)
+  - The HMAC secret (``signature_shared_secret``; ``helios_hmac_secret``
+    is a deprecated alias for v0.1.x back-compat)
 """
 
 from __future__ import annotations
@@ -35,8 +38,10 @@ CacheOrRedis = RedisPermissionCache | InMemoryPermissionCache | Redis
 async def create_permission_client(
     *,
     helios_base_url: str,
-    helios_hmac_secret: str,
-    helios_project_token: str,
+    # Canonical name; matches Hecate's SIGNATURE_SHARED_SECRET env var.
+    signature_shared_secret: str | None = None,
+    # Deprecated alias kept for v0.1.x back-compat.
+    helios_hmac_secret: str | None = None,
     redis_url: str | None = None,
     redis: Redis | None = None,
     helios_source_service: str = "helios-permissions-sdk",
@@ -55,6 +60,12 @@ async def create_permission_client(
     that releases resources we own (the Redis client and the httpx
     client). For injected resources it's a no-op.
     """
+    if signature_shared_secret is None and helios_hmac_secret is None:
+        raise ValueError(
+            "Either signature_shared_secret (preferred) or helios_hmac_secret "
+            "(deprecated alias) is required"
+        )
+
     actual_logger = logger if logger is not None else silent_logger
 
     # Cache
@@ -78,8 +89,8 @@ async def create_permission_client(
     # Helios client
     helios = HeliosClient(
         base_url=helios_base_url,
+        signature_shared_secret=signature_shared_secret,
         hmac_secret=helios_hmac_secret,
-        project_token=helios_project_token,
         source_service=helios_source_service,
         fetch_timeout_ms=helios_fetch_timeout_ms,
     )

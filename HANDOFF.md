@@ -7,11 +7,10 @@
 
 | | |
 |---|---|
-| Version | 0.1.0 (initial release) |
+| Version | **0.2.0** — HMAC-only auth model |
 | Branch | `feature/ZIN-4901d--helios-permissions-py` |
-| Tests | 60 passing across 5 suites |
+| Tests | 64 passing across 5 suites |
 | Lint | `ruff check` clean |
-| PyPI | not yet published (awaiting green CI) |
 
 ## What this SDK does
 
@@ -27,6 +26,29 @@ The SDK:
 5. Supports Helios's sync write-through path (after a role change in
    `user_projects`, Helios overwrites the cache directly with the new
    perm array — no race window).
+
+## Authentication model (v0.2.0)
+
+The Helios route is **HMAC-only**. Knowing `SIGNATURE_SHARED_SECRET` is
+the entire auth surface — no `Authorization` header, no project token,
+no user token, no `x-tenant-id` (the tenant is carried in the query
+string, which the caller signs).
+
+Why a static project token on an env var is wrong:
+- A project token is **bound to one tenant** AND **expires**. Neither
+  is compatible with a long-lived env var.
+- The Helios `/internal/permissions/:userId?tenantId=...` route (ZIN-4901e
+  in helios) is gated by `SIGNATURE_SHARED_SECRET` alone. The service
+  calling the SDK proves it knows the secret by signing the request.
+
+The previous v0.1.0 design used `x-project-token` against the legacy
+`/internal/users/:userId/permissions` route (which is the Mercury target
+and requires the full set of headers). That contract is now exclusive
+to Mercury. The SDK uses the new HMAC-only route.
+
+The `HeliosClient` constructor takes `signature_shared_secret` (the
+canonical name, matches Hecate's `SIGNATURE_SHARED_SECRET` env var).
+The v0.1.0 alias `hmac_secret` is still accepted for back-compat.
 
 ## Files
 
@@ -57,6 +79,9 @@ tests/
 
 ## Decisions locked
 
+- **HMAC-only auth model (v0.2.0).** No project tokens, no service
+  tokens, no Mercury-credentials exchange. The route is gated by
+  `SIGNATURE_SHARED_SECRET` alone.
 - **Drop JWT `permissions[]` claim.** Every service uses the SDK for
   authz; the JWT is identity-only. (Follow-up: file in Mercury HANDOFF.)
 - **Drop `@UserAuth(['perm:...'])` scope checks.** Service-layer
@@ -111,9 +136,17 @@ instance). Global coalescing via Redis lock is a v2 optimization.
 | Var | Required | Description |
 |---|---|---|
 | `HELIOS_BASE_URL` | yes | e.g. `https://helios.internal` |
-| `HELIOS_HMAC_SECRET` | yes | Shared HMAC-SHA256 secret |
-| `HELIOS_PROJECT_TOKEN` | yes | Project token for the platform tenant |
+| `SIGNATURE_SHARED_SECRET` | yes | HMAC-SHA256 shared secret (canonical name) |
 | `PERMISSION_REDIS_URL` | yes | Shared Redis URL across all services |
+
+> **Removed in v0.2.0:** `HELIOS_PROJECT_TOKEN` is no longer needed.
+> The new HMAC-only route is gated by `SIGNATURE_SHARED_SECRET` alone.
+> Project tokens are tenant-bound AND expire, so they were never a
+> good fit for an env var.
+>
+> **Deprecated alias:** `HELIOS_HMAC_SECRET` → use `SIGNATURE_SHARED_SECRET`.
+> The old name is still accepted as a back-compat alias by both the
+> `HeliosClient` constructor and the `create_permission_client` factory.
 
 ## Cross-SDK consistency
 
@@ -128,6 +161,10 @@ reject if |now - timestamp| > 300s
 The TS SDK (`@wazobiatech/helios-permissions`) and this Python SDK
 produce byte-identical signatures for the same inputs. Verified
 independently in each SDK's test suite.
+
+The HMAC-only route (`GET /internal/permissions/:userId?tenantId=...`)
+is implemented in helios as ZIN-4901e (`ServicePermissionsController`
++ `hmacServicePermissionsMiddleware`).
 
 ## Out of scope (deferred)
 
@@ -148,6 +185,6 @@ independently in each SDK's test suite.
 ```bash
 poetry install
 poetry run ruff check src tests   # clean
-poetry run pytest                 # 60/60 pass
+poetry run pytest                 # 64/64 pass
 poetry run pytest -v              # verbose
 ```

@@ -35,7 +35,6 @@ def _make_client(
     *,
     base_url: str = "https://helios.internal",
     secret: str = "secret",
-    project_token: str = "pt",
 ) -> tuple[HeliosClient, dict[str, Any]]:
     captured: dict[str, Any] = {}
 
@@ -46,8 +45,7 @@ def _make_client(
 
     client = HeliosClient(
         base_url=base_url,
-        hmac_secret=secret,
-        project_token=project_token,
+        signature_shared_secret=secret,
         fetch_impl=mock_fetch,
     )
     return client, captured
@@ -84,7 +82,43 @@ async def test_signs_method_upper_path_timestamp_with_hmac_sha256_lowercase_hex(
     assert len(signature) == 64
 
 
-async def test_sets_required_headers() -> None:
+async def test_hmac_secret_alias_works() -> None:
+    """Deprecated ``hmac_secret`` kwarg still accepted for v0.1.x callers."""
+    client, captured = _make_client(
+        _MockResponse(200, {"status": "not_a_member"}),
+        secret="aliased-secret",
+    )
+
+    await client.fetch_user_permissions("u-1", "t-1")
+
+    timestamp = captured["headers"]["x-timestamp"]
+    signature = captured["headers"]["x-signature"]
+    signed_path = captured["url"].replace("https://helios.internal", "")
+    expected = hmac.new(
+        b"aliased-secret",
+        f"GET{signed_path}{timestamp}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    assert signature == expected
+
+
+async def test_requires_signature_shared_secret_or_hmac_secret() -> None:
+    """Both kwargs missing → ValueError."""
+    with pytest.raises(ValueError, match="signature_shared_secret"):
+        HeliosClient(
+            base_url="https://helios.internal",
+            fetch_impl=lambda u, k: _MockResponse(200, {"status": "not_a_member"}),
+        )
+
+
+# --- Headers ---------------------------------------------------------------
+
+
+async def test_sets_required_headers_no_authorization() -> None:
+    """HMAC-only: no Authorization, no project token, no x-tenant-id.
+
+    The route is gated by ``SIGNATURE_SHARED_SECRET`` alone.
+    """
     client, captured = _make_client(
         _MockResponse(200, {"status": "not_a_member"}),
     )
@@ -93,8 +127,18 @@ async def test_sets_required_headers() -> None:
 
     headers = captured["headers"]
     assert headers["x-source-service"] == "helios-permissions-sdk"
-    assert headers["x-project-token"] == "pt"
     assert headers["x-correlation-id"]
+    assert "Authorization" not in headers
+    assert "x-project-token" not in headers
+    assert "x-tenant-id" not in headers
+
+
+async def test_tenant_is_carried_in_the_query_string() -> None:
+    client, captured = _make_client(
+        _MockResponse(200, {"status": "not_a_member"}),
+    )
+    await client.fetch_user_permissions("u-1", "tenant-xyz")
+    assert "tenantId=tenant-xyz" in captured["url"]
 
 
 # --- Response handling -----------------------------------------------------
@@ -137,8 +181,7 @@ async def test_raises_helios_unreachable_error_on_network_error() -> None:
 
     client = HeliosClient(
         base_url="https://helios.internal",
-        hmac_secret="secret",
-        project_token="pt",
+        signature_shared_secret="secret",
         fetch_impl=mock_fetch,
     )
     with pytest.raises(HeliosUnreachableError):
@@ -152,3 +195,12 @@ async def test_encodes_user_id_and_tenant_id_in_the_path() -> None:
     await client.fetch_user_permissions("user/with/slashes", "tenant with spaces")
     assert "user%2Fwith%2Fslashes" in captured["url"]
     assert "tenant%20with%20spaces" in captured["url"]
+
+
+async def test_hits_the_hmac_only_route() -> None:
+    """The new HMAC-only route is at /internal/permissions/{userId}."""
+    client, captured = _make_client(
+        _MockResponse(200, {"status": "not_a_member"}),
+    )
+    await client.fetch_user_permissions("u-1", "t-1")
+    assert "/internal/permissions/u-1" in captured["url"]

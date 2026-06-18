@@ -1,9 +1,14 @@
 """HeliosClient — async HMAC-signed GET to Helios's permission endpoint.
 
+The route is HMAC-only. Knowing ``SIGNATURE_SHARED_SECRET`` is the
+entire auth surface — no ``Authorization`` header, no project token,
+no user token, no ``x-tenant-id`` (the tenant is carried in the
+query string).
+
 We implement the signing here directly (instead of pulling in
-``wazobiatech-nexus-mcp``) to keep the SDK's dependency surface minimal.
-The signing logic is a few lines of stdlib code; coupling to the HTTP
-middleware library would be overkill for a single GET.
+``wazobiatech-nexus-mcp``) to keep the SDK's dependency surface
+minimal. The signing logic is a few lines of stdlib code; coupling
+to the HTTP middleware library would be overkill for a single GET.
 
 HMAC payload (per wazobiatech/nexus-mcp-contract)::
 
@@ -40,12 +45,6 @@ class HeliosUnreachableError(Exception):
         self.name = "HeliosUnreachableError"
 
 
-# Discriminated union: ``status`` is the discriminator.
-HeliosMembershipResolution = (
-    "HeliosMembershipResolution"  # forward-declared as a TypeAlias below
-)
-
-
 from typing import TypedDict  # noqa: E402
 
 
@@ -79,18 +78,25 @@ class HeliosClient:
     def __init__(
         self,
         base_url: str,
-        hmac_secret: str,
-        project_token: str,
+        # Canonical name; matches Hecate's SIGNATURE_SHARED_SECRET env var.
+        signature_shared_secret: str | None = None,
+        # Deprecated alias kept for v0.1.0 back-compat.
+        hmac_secret: str | None = None,
         *,
         source_service: str = "helios-permissions-sdk",
         fetch_timeout_ms: int = 2000,
         fetch_impl: _DefaultFetch | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        secret = signature_shared_secret or hmac_secret
+        if secret is None:
+            raise ValueError(
+                "Either signature_shared_secret (preferred) or hmac_secret "
+                "(deprecated alias) is required"
+            )
         # Strip trailing slash to avoid double-slash in URL composition.
         self._base_url = base_url.rstrip("/")
-        self._hmac_secret = hmac_secret
-        self._project_token = project_token
+        self._signature_shared_secret = secret
         self._source_service = source_service
         self._fetch_timeout_ms = fetch_timeout_ms
         self._owns_client = client is None and fetch_impl is None
@@ -121,7 +127,7 @@ class HeliosClient:
         """
         payload = f"{method.upper()}{full_path}{timestamp}".encode()
         return hmac.new(
-            self._hmac_secret.encode("utf-8"), payload, hashlib.sha256
+            self._signature_shared_secret.encode("utf-8"), payload, hashlib.sha256
         ).hexdigest()
 
     async def fetch_user_permissions(
@@ -129,14 +135,14 @@ class HeliosClient:
     ) -> HeliosMembershipResolution:
         """Fetch the resolved permission set for ``(user_id, tenant_id)``.
 
-        Returns the discriminated union from Helios; the ``PermissionClient``
+        Returns the discriminated union from Helios; the :class:`PermissionClient`
         translates ``not_a_member`` and ``inactive`` into empty arrays.
 
         Raises :class:`HeliosUnreachableError` on network failure, timeout,
         or non-2xx response (other than 404, which means ``not_a_member``).
         """
         path = (
-            f"/internal/users/{quote(user_id, safe='')}/permissions"
+            f"/internal/permissions/{quote(user_id, safe='')}"
             f"?tenantId={quote(tenant_id, safe='')}"
         )
         url = f"{self._base_url}{path}"
@@ -145,7 +151,6 @@ class HeliosClient:
         signature = self._sign("GET", path, timestamp)
 
         headers = {
-            "x-project-token": self._project_token,
             "x-source-service": self._source_service,
             "x-signature": signature,
             "x-timestamp": timestamp,
