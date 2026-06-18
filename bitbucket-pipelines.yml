@@ -9,6 +9,11 @@ definitions:
         script:
           - pip install poetry==1.8.0
           - poetry install --no-interaction
+          # Generate src/helios_permissions/role_permissions.py from the
+          # pinned permission-contract tag. Must run before lint/test
+          # because the generated file is the source of truth for the
+          # closed Permission Literal type.
+          - PERMISSION_CONTRACT_VERSION=v1.0.0 poetry run codegen
           - poetry run ruff check src tests
           - poetry run pytest -v
 

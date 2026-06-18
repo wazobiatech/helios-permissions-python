@@ -7,10 +7,11 @@
 
 | | |
 |---|---|
-| Version | **0.2.0** — HMAC-only auth model |
+| Version | **0.3.0** — codegen'd from `wazobiatech/permission-contract` |
 | Branch | `feature/ZIN-4901d--helios-permissions-py` |
 | Tests | 64 passing across 5 suites |
 | Lint | `ruff check` clean |
+| Contract version | `permission-contract@v1.0.0` |
 
 ## What this SDK does
 
@@ -56,7 +57,7 @@ The v0.1.0 alias `hmac_secret` is still accepted for back-compat.
 src/
   helios_permissions/
     __init__.py                       # Public API barrel
-    role_permissions.py                # Permission union + ROLE_PERMISSIONS map
+    role_permissions.py                # GENERATED — Permission Literal + ROLE_PERMISSIONS map (do not edit)
     permission_client.py              # PermissionClient (hot-path authz)
     factory.py                        # create_permission_client() async factory
     logger.py                         # Logger protocol + silent/console defaults
@@ -68,6 +69,9 @@ src/
     helios/
       __init__.py
       client.py                       # HeliosClient (HMAC-signed GET)
+scripts/
+  codegen-permissions.py              # Fetches contract, validates, runs codegen-py
+  codegen-py.mjs                      # Vendored from permission-contract
 tests/
   conftest.py                         # Adds src/ to sys.path
   test_role_permissions.py            # ROLE_PERMISSIONS matrix
@@ -76,6 +80,20 @@ tests/
   test_helios_client.py               # HMAC signing + response handling
   test_permission_client.py           # Hot path, fail-closed, coalescing
 ```
+
+## Permission contract source of truth (v0.3.0)
+
+The `Permission = Literal[...]` type and `ROLE_PERMISSIONS` dict are
+**codegen'd** from
+[`wazobiatech/permission-contract`](https://github.com/wazobiatech/permission-contract)
+(public mirror). To change the platform's role → permission matrix:
+
+1. Open a PR against `permission-contract` — edit `permissions.json`,
+   bump `version` (semver).
+2. Tag a release (`v1.1.0`, etc.).
+3. Open a PR against this SDK — bump `PERMISSION_CONTRACT_VERSION`
+   in `bitbucket-pipelines.yml`.
+4. CI runs `poetry run codegen`, then `ruff check`, `pytest`.
 
 ## Decisions locked
 
@@ -168,10 +186,11 @@ is implemented in helios as ZIN-4901e (`ServicePermissionsController`
 
 ## Out of scope (deferred)
 
-- **Permission contract repo** (`wazobiatech/permission-contract` —
-  language-agnostic JSON files mirrored from this map). The contract
-  ticket is ZIN-4901a. The SDK is structured so the JSON can replace the
-  hardcoded tuples in `role_permissions.py` via codegen in v0.2.0.
+- **Helios-side migration.** Helios still has its own copy of the
+  permission map at `helios/src/permissions/role-permissions.ts`. A
+  follow-up ticket will replace it with `import from
+  wazobiatech_helios_permissions` (or a generated file). Not in
+  ZIN-4901a scope.
 - **Go / Laravel SDKs.** Mirror packages. Same API surface.
 - **Multi-instance Redis lock.** Use Redis-based SET NX EX for global
   coalescing when scaling beyond ~5 instances.
@@ -184,6 +203,8 @@ is implemented in helios as ZIN-4901e (`ServicePermissionsController`
 
 ```bash
 poetry install
+# Codegen requires network — fetches the contract from GitHub.
+PERMISSION_CONTRACT_VERSION=v1.0.0 poetry run codegen
 poetry run ruff check src tests   # clean
 poetry run pytest                 # 64/64 pass
 poetry run pytest -v              # verbose

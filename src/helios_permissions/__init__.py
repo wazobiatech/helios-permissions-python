@@ -40,7 +40,7 @@ from .role_permissions import (
     role_has_permission,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     # Version
