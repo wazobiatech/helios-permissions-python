@@ -1,0 +1,45 @@
+image: python:3.12-slim
+
+definitions:
+  steps:
+    - step: &test
+        name: Lint & Test
+        caches:
+          - pip
+        script:
+          - pip install poetry==1.8.0
+          - poetry install --no-interaction
+          - poetry run ruff check src tests
+          - poetry run pytest -v
+
+pipelines:
+  default:
+    - step: *test
+
+  branches:
+    main:
+      - step: *test
+
+  tags:
+    v*:
+      - step: *test
+      - step:
+          name: Assert tag matches pyproject.toml version
+          script:
+            - PKG_VERSION="v$(poetry run python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")"
+            - |
+              if [ "$PKG_VERSION" != "$BITBUCKET_TAG" ]; then
+                echo "Tag $BITBUCKET_TAG does not match pyproject.toml version $PKG_VERSION"
+                exit 1
+              fi
+            - echo "Tag $BITBUCKET_TAG matches pyproject.toml version"
+      - step:
+          name: Publish to private PyPI
+          deployment: production
+          caches:
+            - pip
+          script:
+            - pip install poetry==1.8.0
+            - poetry install --no-interaction
+            - poetry config pypi-token.pypi $PYPI_TOKEN
+            - poetry publish --build
