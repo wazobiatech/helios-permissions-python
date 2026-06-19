@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "wazobiatech-helios-permissions"
-version = "0.3.0"
+version = "0.3.1"
 description = "Python SDK for the Nexus permission contract — Redis-cached callerHasPermission for cross-service authz. Role-permissions are codegen'd from wazobiatech/permission-contract."
 authors = ["Wazobia Tech <dev@wazobiatech.com>"]
 readme = "README.md"

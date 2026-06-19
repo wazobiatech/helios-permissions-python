@@ -10,11 +10,22 @@ We implement the signing here directly (instead of pulling in
 minimal. The signing logic is a few lines of stdlib code; coupling
 to the HTTP middleware library would be overkill for a single GET.
 
-HMAC payload (per wazobiatech/nexus-mcp-contract)::
+HMAC payload::
 
-    payload = METHOD.upper() + fullPath + timestamp
+    payload = method + path + timestamp
     digest  = HMAC-SHA256(secret_utf8, payload_utf8), lowercase hex
     reject if |now - timestamp| > 300s
+
+Where ``method`` is the lowercase HTTP method (matches Helios's
+hmac.ts verifier, which uses ``req.method`` from Express — lowercase)
+and ``path`` is the URL path WITHOUT the query string (matches
+``req.path`` in Express, which strips the query string).
+
+Note: this deviates from the canonical nexus-mcp contract
+(``METHOD.upper()`` + full path including query string). The
+deviation is forced by Helios's existing verifier at
+``helios/src/internal/hmac.ts``. If Helios is fixed to use the
+canonical contract, this can be reverted.
 """
 
 from __future__ import annotations
@@ -119,13 +130,22 @@ class HeliosClient:
     async def _default_fetch(self, url: str, kwargs: dict[str, Any]) -> httpx.Response:
         return await self._client.get(url, **kwargs)
 
-    def _sign(self, method: str, full_path: str, timestamp: str) -> str:
-        """Compute the HMAC-SHA256 signature per the contract.
+    def _sign(self, method: str, path: str, timestamp: str) -> str:
+        """Compute the HMAC-SHA256 signature.
 
-        Payload: ``METHOD.upper() + fullPath + timestamp`` (fullPath
-        includes query string). Lowercase hex output.
+        Payload: ``method + path + timestamp``. The path is the URL
+        path WITHOUT the query string (matching Helios's hmac.ts
+        verifier, which signs ``req.method + req.path``). The method
+        is sent in its original case (the verifier uses ``req.method``,
+        which Express provides lowercase).
+
+        Note: this deviates from the canonical nexus-mcp contract
+        (``METHOD.upper()`` + full path including query string). The
+        deviation is forced by Helios's existing verifier at
+        ``helios/src/internal/hmac.ts``. If Helios is fixed to use
+        the canonical contract, this can be reverted.
         """
-        payload = f"{method.upper()}{full_path}{timestamp}".encode()
+        payload = f"{method}{path}{timestamp}".encode()
         return hmac.new(
             self._signature_shared_secret.encode("utf-8"), payload, hashlib.sha256
         ).hexdigest()
@@ -148,7 +168,12 @@ class HeliosClient:
         url = f"{self._base_url}{path}"
         timestamp = str(int(time.time()))
 
-        signature = self._sign("GET", path, timestamp)
+        # Sign the path WITHOUT the query string — Helios's
+        # hmac.ts verifier signs ``req.method + req.path`` (Express's
+        # req.path strips the query string). Mismatching the path
+        # would produce a signature rejection on every call.
+        sign_path = path.split("?", 1)[0]
+        signature = self._sign("GET", sign_path, timestamp)
 
         headers = {
             "x-source-service": self._source_service,
