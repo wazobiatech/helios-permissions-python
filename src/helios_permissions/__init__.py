@@ -30,17 +30,30 @@ from .helios import (
 from .logger import Logger, console_logger, silent_logger
 from .permission_client import PermissionClient, PermissionExplanation
 from .role_permissions import (
+    DUAL_PERMISSIONS,
+    PERM_SCOPE,
+    PLATFORM_PERMISSIONS,
+    PROJECT_PERMISSIONS,
     ROLE_PERMISSIONS,
     ROLES,
+    SELF_PERMISSIONS,
+    DualPermission,
     Permission,
+    PermScope,
+    PlatformPermission,
+    ProjectPermission,
     Role,
+    SelfPermission,
     is_permission,
+    is_platform_grantable,
     is_role,
+    is_self_scope,
+    is_tenant_grantable,
     resolve_permissions,
     role_has_permission,
 )
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 __all__ = [
     # Version
@@ -54,6 +67,20 @@ __all__ = [
     "role_has_permission",
     "is_permission",
     "is_role",
+    # v1.3.0 — 4-scope model
+    "PERM_SCOPE",
+    "PermScope",
+    "SELF_PERMISSIONS",
+    "PLATFORM_PERMISSIONS",
+    "PROJECT_PERMISSIONS",
+    "DUAL_PERMISSIONS",
+    "SelfPermission",
+    "PlatformPermission",
+    "ProjectPermission",
+    "DualPermission",
+    "is_self_scope",
+    "is_platform_grantable",
+    "is_tenant_grantable",
     # Client
     "PermissionClient",
     "PermissionExplanation",

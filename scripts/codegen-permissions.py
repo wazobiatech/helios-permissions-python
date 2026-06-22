@@ -82,21 +82,56 @@ def validate_contract_in_memory(contract: dict) -> None:
     if not isinstance(role_permissions, dict):
         fail("contract missing role_permissions{}")
 
-    flat: set[str] = set()
-    for perms in permissions.values():
-        flat.update(perms)
+    flat: dict[str, str] = {}  # name → scope
+    valid_scopes = {"self", "platform", "project", "platform/project"}
+    for service, perms in permissions.items():
+        if not isinstance(perms, list):
+            fail(f"permissions[{service}] is not an array")
+        for p in perms:
+            if isinstance(p, str):
+                fail(
+                    f"permissions[{service}] contains a bare string perm "
+                    f'"{p}" — v1.3.0 requires {{name, scope}} objects'
+                )
+            if not isinstance(p, dict) or not isinstance(p.get("name"), str):
+                fail(f"permissions[{service}] has a malformed perm: {p!r}")
+            name = p["name"]
+            scope = p.get("scope")
+            if scope not in valid_scopes:
+                fail(f'perm "{name}" has invalid scope "{scope}"')
+            if scope == "self" and not name.endswith(":self"):
+                fail(f'perm "{name}" has scope "self" but is missing the ":self" suffix')
+            if name.endswith(":self") and scope != "self":
+                fail(f'perm "{name}" ends with ":self" but scope is "{scope}" (must be "self")')
+            flat[name] = scope
 
     for role, defn in role_permissions.items():
         perms = defn.get("permissions", [])
         for perm in perms:
             if perm not in flat:
                 fail(f'role "{role}" references unknown perm "{perm}"')
-        if "helios:tenant:switch" not in perms:
-            fail(f'role "{role}" missing universal perm helios:tenant:switch')
+            if flat[perm] == "self":
+                fail(
+                    f'role "{role}" contains self-scope perm "{perm}" '
+                    "— self perms are universal and must not be in any role"
+                )
+            if flat[perm] == "project":
+                fail(
+                    f'role "{role}" contains project-scope perm "{perm}" '
+                    "— project perms are tenant-user only and must not be in any role"
+                )
         if role != "OWNER" and "helios:tenant:transfer" in perms:
-            fail(
-                f'role "{role}" has OWNER-only perm helios:tenant:transfer'
-            )
+            fail(f'role "{role}" has OWNER-only perm helios:tenant:transfer')
+
+    # helios:tenant:switch:self must be present and have scope "self"
+    SWITCH = "helios:tenant:switch:self"
+    if SWITCH not in flat:
+        fail(f'required perm "{SWITCH}" is missing from permissions[service]')
+    elif flat[SWITCH] != "self":
+        fail(
+            f'perm "{SWITCH}" must have scope "self" (universal perm), '
+            f'got "{flat[SWITCH]}"'
+        )
 
 
 def run_codegen_py(contract_path: Path) -> str:
