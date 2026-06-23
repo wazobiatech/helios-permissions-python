@@ -7,11 +7,11 @@
 
 | | |
 |---|---|
-| Version | **0.3.0** — codegen'd from `wazobiatech/permission-contract` |
+| Version | **0.5.0** — no-expiry cache default; codegen'd from `wazobiatech/permission-contract` |
 | Branch | `feature/ZIN-4901d--helios-permissions-py` |
-| Tests | 64 passing across 5 suites |
-| Lint | `ruff check` clean |
-| Contract version | `permission-contract@v1.0.0` |
+| Tests | 87 passing across 6 suites. Plus 2 pre-existing HMAC test failures on `main` (`tests/test_helios_client.py`), unrelated to v0.5.0 — they predate the no-expiry change. |
+| Lint | `ruff check src tests` clean |
+| Contract version | `permission-contract@v1.4.0` (4-scope permission model + `helios:external:*` perms for Use case 2) |
 
 ## What this SDK does
 
@@ -81,7 +81,7 @@ tests/
   test_permission_client.py           # Hot path, fail-closed, coalescing
 ```
 
-## Permission contract source of truth (v0.3.0)
+## Permission contract source of truth (v0.3.0+)
 
 The `Permission = Literal[...]` type and `ROLE_PERMISSIONS` dict are
 **codegen'd** from
@@ -90,10 +90,17 @@ The `Permission = Literal[...]` type and `ROLE_PERMISSIONS` dict are
 
 1. Open a PR against `permission-contract` — edit `permissions.json`,
    bump `version` (semver).
-2. Tag a release (`v1.1.0`, etc.).
+2. Tag a release (`v1.4.0`, etc.).
 3. Open a PR against this SDK — bump `PERMISSION_CONTRACT_VERSION`
-   in `bitbucket-pipelines.yml`.
+   in `bitbucket-pipelines.yml` AND the default in
+   `scripts/codegen-permissions.py` (both must match).
 4. CI runs `poetry run codegen`, then `ruff check`, `pytest`.
+
+Currently pinned to `permission-contract@v1.4.0`, which adds three
+`helios:external:*` permissions (register / revoke / view) for the
+Use case 2 ("tenant brings their own auth") flow. `register` and
+`revoke` are OWNER-only per the contract's `owner_only_permissions`
+invariant; `view` is OWNER+ADMIN.
 
 ## Decisions locked
 
@@ -119,10 +126,48 @@ The `Permission = Literal[...]` type and `ROLE_PERMISSIONS` dict are
 | Op | Behavior |
 |---|---|
 | `get(user_id, tenant_id)` | Redis GET. On miss → `None`. On error → log warn + `None` (fall-through). |
-| `set(...)` | `SET ... NX EX 60`. Stale-populate race protection. On error → log warn + swallow. |
-| `write_through(...)` | `SET ... EX 60` (no NX). Used by Helios after a role change. |
+| `set(...)` | `SET ... NX` (no EX by default). Stale-populate race protection. On error → log warn + swallow. |
+| `write_through(...)` | `SET ...` (no NX, no EX by default). Used by Helios after a role change. |
 | `invalidate(user_id, tenant_id=None)` | `DEL` (specific) or `SCAN MATCH ... \| DEL` (all). On error → log error + raise. |
 | `invalidate_tenant(tenant_id)` | `SCAN MATCH helios:perms:*:{tenant_id} \| DEL`. On error → raise. |
+
+### TTL policy (v0.5.0 — no expiry by default)
+
+The cache is the primary read path for `caller_has_permission`. The
+platform targets a 90-98% cache hit rate, which means entries must
+outlive the request burst. Every entry is invalidated explicitly at
+the mutation site — Helios calls `write_through` / `invalidate` after
+every role change, Hecate's event consumer drops the key on `helios.*`
+events, and the internal events handlers (`athens.project.*`,
+`athens.service.update`, `mercury.user.deleted`,
+`helios.invitation.accepted`) invalidate the tenant-level cache after
+each event. A 60s safety-net TTL would just be wasted work — entries
+the next read would re-populate anyway, forcing an unnecessary
+round-trip to Helios.
+
+v0.4.0 shipped with a 60s default TTL. v0.5.0 removed it. **This is a
+behavioral change for consumers**: if you relied on the implicit 60s
+TTL, you now get no expiry. To opt back in, pass `cache_ttl_seconds=60`
+to `create_permission_client` (or `ttl_seconds=60` directly to
+`RedisPermissionCache`). The opt-in is per-instance.
+
+```python
+client, cache, close = await create_permission_client(
+    # ...
+    cache_ttl_seconds=60,  # opt back into a 60s TTL (not recommended)
+)
+```
+
+### Important: Helios-side cache must agree
+
+The Helios service runs its own `PermissionCacheService` (in
+`helios/src/internal/permission-cache.service.ts`) which uses the same
+key shape and JSON serialization. **Both layers must use the same TTL
+policy** — if Helios writes with one TTL and the SDK reads with another,
+the SDK's EX wins on the next SDK-side `set` call and may drop entries
+before Helios has a chance to re-write them. v0.5.0 keeps both layers
+in lockstep: both default to no expiry, both opt back into a TTL via a
+matching env var / option name.
 
 ## Concurrent read coalescing
 
@@ -204,8 +249,8 @@ is implemented in helios as ZIN-4901e (`ServicePermissionsController`
 ```bash
 poetry install
 # Codegen requires network — fetches the contract from GitHub.
-PERMISSION_CONTRACT_VERSION=v1.0.0 poetry run codegen
+PERMISSION_CONTRACT_VERSION=v1.4.0 poetry run codegen
 poetry run ruff check src tests   # clean
-poetry run pytest                 # 64/64 pass
+poetry run pytest                 # 87/89 pass (2 pre-existing HMAC failures on main, unrelated to v0.5.0)
 poetry run pytest -v              # verbose
 ```

@@ -16,8 +16,8 @@
 # so SDK releases don't silently drift when the contract bumps.
 #
 # Usage:
-#   PERMISSION_CONTRACT_VERSION=v1.3.0 python scripts/codegen-permissions.py
-#   # default version: v1.3.0
+#   PERMISSION_CONTRACT_VERSION=v1.4.0 python scripts/codegen-permissions.py
+#   # default version: v1.4.0
 #
 # Network failure is fatal — there is no fallback to a checked-in
 # permissions.json. The contract is the single source of truth; an
@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GENERATED_FILE = ROOT / "src" / "helios_permissions" / "role_permissions.py"
 CODEGEN_SCRIPT = ROOT / "scripts" / "codegen-py.mjs"
-CONTRACT_VERSION = os.environ.get("PERMISSION_CONTRACT_VERSION", "v1.3.0")
+CONTRACT_VERSION = os.environ.get("PERMISSION_CONTRACT_VERSION", "v1.4.0")
 CONTRACT_URL = (
     f"https://raw.githubusercontent.com/wazobiatech/permission-contract/"
     f"{CONTRACT_VERSION}/permissions.json"
@@ -91,7 +91,7 @@ def validate_contract_in_memory(contract: dict) -> None:
             if isinstance(p, str):
                 fail(
                     f"permissions[{service}] contains a bare string perm "
-                    f'"{p}" — v1.3.0 requires {{name, scope}} objects'
+                    f'"{p}" — v1.4.0 requires {{name, scope}} objects'
                 )
             if not isinstance(p, dict) or not isinstance(p.get("name"), str):
                 fail(f"permissions[{service}] has a malformed perm: {p!r}")
@@ -164,11 +164,16 @@ def main() -> None:
     GENERATED_FILE.parent.mkdir(parents=True, exist_ok=True)
     GENERATED_FILE.write_text(generated)
 
-    sentinel = f"permission-contract v{contract['version']}"
+    # The vendored codegen-py.mjs emits the contract version as
+    # `permission-contract\` v1.x.y (generated ...)`. The marker
+    # substring we look for is `v1.x.y (generated` so we match the
+    # header that the generator actually produces (backticks around
+    # the repo name break a naive `permission-contract v1.x.y` check).
+    sentinel = f"v{contract['version']} (generated"
     if sentinel not in generated:
         fail(
             f"generated source does not reference contract version "
-            f"{contract['version']}"
+            f"{contract['version']} (looking for substring {sentinel!r})"
         )
     log(f"wrote {GENERATED_FILE}")
     log(

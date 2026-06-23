@@ -34,7 +34,17 @@ Concurrency:
   - In-process lock per ``(user_id, tenant_id)`` coalesces concurrent
     cold-cache reads. The first call fetches from Helios; concurrent
     calls await the same future.
-  - The TTL (60s default) is the safety net for missed invalidations.
+
+Cache TTL:
+
+  The default cache has NO TTL — entries live until explicit DEL via
+  :meth:`invalidate` / :meth:`invalidate_tenant` (or via Helios's
+  sync write-through on every role-changing mutation). The cache is
+  the primary read path for ``callerHasPermission`` and we target a
+  90-98% hit rate; entries must outlive the request burst. Pass
+  ``cache_ttl_seconds=<positive int>`` to ``create_permission_client``
+  to opt back into a TTL (useful for staging with high churn).
+  Both Helios-side and SDK-side caches must use the same TTL policy.
 """
 
 from __future__ import annotations
@@ -200,8 +210,9 @@ class PermissionClient:
         When ``tenant_id`` is omitted, drops all entries for this user
         across every tenant.
 
-        Raises on cache failure (operators need to know — the TTL is
-        the only safety net if DEL fails).
+        Raises on cache failure (operators need to know — without a
+        TTL safety net, a missed invalidate is sticky until the next
+        write_through for this user).
         """
         await self._cache.invalidate(user_id, tenant_id)
 

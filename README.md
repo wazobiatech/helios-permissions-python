@@ -11,8 +11,9 @@ user allowed to do X in tenant Y?"** The answer lives in Helios's
 is the client for that source of truth, with three properties that matter
 in production:
 
-1. **Cache-first** — Redis-cached (60s TTL), so the hot path is one Redis
-   GET. Misses fetch from Helios and populate.
+1. **Cache-first** — Redis-cached (no expiry by default; entries are
+   invalidated explicitly at the mutation site), so the hot path is
+   one Redis GET. Misses fetch from Helios and populate.
 2. **Event-driven invalidation** — Helios writes to the cache synchronously
    after every role change (write-through). Kafka events invalidate
    downstream caches as a backup.
@@ -116,15 +117,18 @@ Permissions follow `{service}:{resource}:{action}`. The closed union:
 ## Cache semantics
 
 - **Key shape:** `helios:perms:{user_id}:{tenant_id}` → JSON list of perms
-- **TTL:** 60 seconds (the safety net for missed invalidations)
-- **Populate:** `SET ... NX EX 60` — never overwrites a concurrent populate (avoids stale-resurrection after invalidate race)
-- **Write-through (Helios only):** `SET ... EX 60` (no NX) — Helios KNOWS the new value, overwrites unconditionally
+- **TTL:** none by default. Entries live until explicit DEL (Helios
+  invalidates synchronously on every role change). Pass
+  `cache_ttl_seconds=N` to `create_permission_client` to opt back into
+  a TTL.
+- **Populate:** `SET ... NX` (no EX by default) — never overwrites a concurrent populate (avoids stale-resurrection after invalidate race)
+- **Write-through (Helios only):** `SET ...` (no NX, no EX by default) — Helios KNOWS the new value, overwrites unconditionally
 - **Invalidate:** `SCAN MATCH ... | DEL` (non-blocking) for `invalidate(user_id)` / `invalidate_tenant`. Direct `DEL` for `invalidate(user_id, tenant_id)`.
 - **Negative cache:** `[]` (empty list) means "user is not a member" — distinct from `None` (miss).
 - **Failure modes:**
   - Redis GET fails → log + return `None` (caller falls through to Helios)
   - Redis SET fails → log + swallow (best-effort; cache miss next time)
-  - Redis DEL fails → log + raise (operators need to know — TTL is the only safety net)
+  - Redis DEL fails → log + raise (operators need to know — no TTL safety net)
 
 ## Concurrent read coalescing
 
@@ -157,13 +161,14 @@ poetry run pytest -v       # verbose
 poetry run ruff check src tests
 ```
 
-60 tests across 5 suites cover:
+87 tests across 6 suites cover:
 
 - Role × Permission map (every role, every perm)
-- `InMemoryPermissionCache` (NX semantics, writeThrough, invalidate, TTL)
-- `RedisPermissionCache` (via `fakeredis` — SET NX EX, SCAN, JSON, error handling)
+- `InMemoryPermissionCache` (NX semantics, writeThrough, invalidate, no-TTL default)
+- `RedisPermissionCache` (via `fakeredis` — SET NX, SCAN, JSON, error handling, no-TTL default + opt-in TTL)
 - `HeliosClient` (HMAC signing, response handling, error paths)
 - `PermissionClient` (cache-first, fail-closed, concurrent coalescing, writeThrough, explain)
+- `role_permissions` (the codegen output — closed `Permission` Literal)
 
 ## License
 

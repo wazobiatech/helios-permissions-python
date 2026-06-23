@@ -103,10 +103,60 @@ async def test_serializes_perms_as_json_cross_language_compat(
 async def test_ttl_is_set_on_writes_bounded_staleness(
     cache: RedisPermissionCache, redis
 ) -> None:
+    # The fixture's cache is built with ttl_seconds=60, so writes
+    # SHOULD carry an EX. Pin that here — the no-expiry default is
+    # exercised in TestNoTTL below with a separate, default-TTL
+    # cache instance.
     await cache.set("user-1", "tenant-1", ["helios:members:view"])
     ttl = await redis.ttl("helios:perms:user-1:tenant-1")
     assert ttl is not None and ttl > 0
     assert ttl <= 60
+
+
+class TestNoTTL:
+    """v0.5.0 default: no expiry. Entries live until explicit DEL.
+
+    The cache is the primary read path for callerHasPermission and we
+    target a 90-98% hit rate — entries must outlive the request burst.
+    Every entry is invalidated explicitly at the mutation site.
+    """
+
+    @pytest.fixture
+    def no_ttl_cache(self, redis) -> RedisPermissionCache:
+        return RedisPermissionCache(
+            redis=redis, ttl_seconds=0, logger=silent_logger
+        )
+
+    async def test_default_constructor_has_no_ttl(
+        self, no_ttl_cache: RedisPermissionCache, redis
+    ) -> None:
+        await no_ttl_cache.set("user-1", "tenant-1", ["helios:members:view"])
+        # Redis returns -1 when a key exists with no expiry set.
+        ttl = await redis.ttl("helios:perms:user-1:tenant-1")
+        assert ttl == -1
+
+    async def test_write_through_default_also_has_no_ttl(
+        self, no_ttl_cache: RedisPermissionCache, redis
+    ) -> None:
+        await no_ttl_cache.write_through(
+            "user-1", "tenant-1", ["helios:tenant:transfer"]
+        )
+        ttl = await redis.ttl("helios:perms:user-1:tenant-1")
+        assert ttl == -1
+
+    async def test_opt_in_ttl_via_constructor(
+        self, redis
+    ) -> None:
+        # Positive ttl_seconds restores the EX arg on writes — useful
+        # for staging with high churn where the keyspace would
+        # otherwise grow unbounded.
+        cache = RedisPermissionCache(
+            redis=redis, ttl_seconds=120, logger=silent_logger
+        )
+        await cache.set("user-1", "tenant-1", ["helios:members:view"])
+        ttl = await redis.ttl("helios:perms:user-1:tenant-1")
+        assert ttl is not None and ttl > 0
+        assert ttl <= 120
 
 
 async def test_returns_none_does_not_raise_on_redis_get_error() -> None:

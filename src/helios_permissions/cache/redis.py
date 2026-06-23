@@ -6,6 +6,28 @@ every downstream service).
 
 Key shape: ``helios:perms:{user_id}:{tenant_id}`` -> JSON array of perms.
 
+TTL policy (no expiry by default):
+
+  The cache is the primary read path for callerHasPermission. We aim
+  for a 90-98% hit rate, which means entries must outlive the request
+  burst. Every entry is invalidated explicitly at the mutation site —
+  Helios calls write_through / invalidate after each role change,
+  Hecate's event consumer drops the key on helios.* events, and the
+  internal events handlers drop the tenant-level cache after each
+  event. A TTL safety-net would only force needless re-population;
+  remove it by default.
+
+  Pass ``ttl_seconds=<positive int>`` to opt back into a TTL. Useful
+  for staging environments with churn that blows up the keyspace.
+  When set, every write below passes ``ex`` explicitly. When unset
+  (the default), writes pass no ``ex`` and Redis keeps the key
+  forever until explicit DEL.
+
+  IMPORTANT: must match the Helios-side cache. If Helios writes with
+  one TTL and the SDK reads with another, the SDK's EX wins on the
+  next SDK-side ``set`` call and may drop entries before Helios has a
+  chance to re-write them.
+
 Invalidation patterns:
 
   - ``invalidate(user_id)``            -> SCAN MATCH helios:perms:{user_id}:* DEL
@@ -20,15 +42,9 @@ Error handling:
   - GET failures: log warn + return ``None``. Caller falls through to Helios.
   - SET / write_through failures: log warn + swallow. Cache is best-effort.
   - Invalidate failures: log error + raise. The caller (event consumer
-    or Helios service) needs to know cache may be stale. The TTL is
-    the bound — 60s of staleness is the worst case.
-
-Why the error asymmetry:
-
-  - Reads / writes that fail are degraded-but-correct paths (Helios is
-    the source of truth).
-  - Invalidation failures leave stale data with no automatic recovery
-    except TTL expiry. Operators need visibility.
+    or Helios service) needs to know cache may be stale. With no TTL,
+    a failed invalidation is sticky until the next write_through for
+    that user; that is the operator-visible signal.
 """
 
 from __future__ import annotations
@@ -43,8 +59,16 @@ from ..role_permissions import Permission
 
 KEY_PREFIX = "helios:perms:"
 
-#: Default TTL: 60 seconds. Bounds staleness when invalidation fails.
-DEFAULT_CACHE_TTL_SECONDS = 60
+#: Default TTL: none (PERMANENT). Entries are refreshed only by
+#: explicit write_through / invalidate calls. Override per-instance
+#: via the ``ttl_seconds`` constructor option.
+#:
+#: Historical note: v0.3.0 shipped with a 60s default TTL as a "safety
+#: net" for missed invalidations. It was removed when the team moved
+#: to a write-through model — the explicit invalidates on every
+#: mutation make the TTL redundant, and a 90-98% cache-hit-rate
+#: platform needs the entries to stick around.
+DEFAULT_CACHE_TTL_SECONDS = 0
 
 #: SCAN batch size — balances round-trip count vs cursor overhead.
 _SCAN_BATCH = 100
@@ -109,15 +133,27 @@ class RedisPermissionCache:
 
     async def set(self, user_id: str, tenant_id: str, perms: list[Permission]) -> None:
         try:
-            # NX = only set if not exists. Prevents a slow in-flight read from
-            # resurrecting a value that was invalidated after the read started.
-            # The TTL is the safety net for missed invalidations.
-            await self._redis.set(
-                self._key(user_id, tenant_id),
-                json.dumps(list(perms)),
-                ex=self._ttl_seconds,
-                nx=True,
-            )
+            # NX = only set if not exists. Prevents a slow in-flight read
+            # from resurrecting a value that was invalidated after the
+            # read started.
+            #
+            # TTL: only pass ex when ttl_seconds > 0. ttl_seconds === 0
+            # (default) means "no expiry"; redis.asyncio omits ex and
+            # Redis keeps the key until explicit DEL. We do NOT pass
+            # KEEPTTL here — this is a fresh write, not a re-write.
+            if self._ttl_seconds > 0:
+                await self._redis.set(
+                    self._key(user_id, tenant_id),
+                    json.dumps(list(perms)),
+                    ex=self._ttl_seconds,
+                    nx=True,
+                )
+            else:
+                await self._redis.set(
+                    self._key(user_id, tenant_id),
+                    json.dumps(list(perms)),
+                    nx=True,
+                )
         except Exception as err:  # noqa: BLE001
             self._logger.warn(
                 {"err": str(err), "user_id": user_id, "tenant_id": tenant_id},
@@ -132,11 +168,20 @@ class RedisPermissionCache:
             # after it knows the new value is correct (e.g. after a role
             # change in user_projects). We want the next read to see the new
             # value immediately, not race with a stale cache entry.
-            await self._redis.set(
-                self._key(user_id, tenant_id),
-                json.dumps(list(perms)),
-                ex=self._ttl_seconds,
-            )
+            #
+            # TTL: same policy as set() — only pass ex when configured.
+            # No KEEPTTL — this is an overwrite, not a refresh.
+            if self._ttl_seconds > 0:
+                await self._redis.set(
+                    self._key(user_id, tenant_id),
+                    json.dumps(list(perms)),
+                    ex=self._ttl_seconds,
+                )
+            else:
+                await self._redis.set(
+                    self._key(user_id, tenant_id),
+                    json.dumps(list(perms)),
+                )
         except Exception as err:  # noqa: BLE001
             self._logger.warn(
                 {"err": str(err), "user_id": user_id, "tenant_id": tenant_id},
@@ -160,7 +205,8 @@ class RedisPermissionCache:
         except Exception as err:  # noqa: BLE001
             self._logger.error(
                 {"err": str(err), "user_id": user_id, "tenant_id": tenant_id},
-                "RedisPermissionCache.invalidate failed — cache may be stale for up to TTL seconds",
+                "RedisPermissionCache.invalidate failed — cache will stay "
+                "stale until the next write_through for this user",
             )
             raise
 
@@ -174,7 +220,8 @@ class RedisPermissionCache:
         except Exception as err:  # noqa: BLE001
             self._logger.error(
                 {"err": str(err), "tenant_id": tenant_id},
-                "invalidate_tenant failed: cache may be stale for up to TTL seconds",
+                "invalidate_tenant failed — affected entries will be "
+                "re-written on the next role change for each user",
             )
             raise
 

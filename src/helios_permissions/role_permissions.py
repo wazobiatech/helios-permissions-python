@@ -2,7 +2,7 @@
 
 Canonical source of truth for the platform. Generated from the
 language-agnostic JSON contract at `wazobiatech/permission-contract`
-v1.3.0 (generated 2026-06-22). Do NOT edit by hand — edit the
+v1.4.0 (generated 2026-06-23). Do NOT edit by hand — edit the
 contract's `permissions.json` and re-run codegen.
 
 The Helios service imports this module via the published package; Helios
@@ -66,6 +66,9 @@ PLATFORM_PERMISSIONS: Final[tuple[str, ...]] = (
     "helios:roles:revoke",
     "helios:invitations:create",
     "helios:invitations:revoke",
+    "helios:external:register",
+    "helios:external:revoke",
+    "helios:external:view",
 )
 
 PROJECT_PERMISSIONS: Final[tuple[str, ...]] = (
@@ -110,6 +113,9 @@ PlatformPermission = Literal[
     "helios:roles:revoke",
     "helios:invitations:create",
     "helios:invitations:revoke",
+    "helios:external:register",
+    "helios:external:revoke",
+    "helios:external:view",
 ]
 ProjectPermission = Literal[
     "muse:posts:read",
@@ -153,6 +159,9 @@ PERM_SCOPE: Final[dict[str, PermScope]] = {
     "helios:roles:revoke": "platform",
     "helios:invitations:create": "platform",
     "helios:invitations:revoke": "platform",
+    "helios:external:register": "platform",
+    "helios:external:revoke": "platform",
+    "helios:external:view": "platform",
     "muse:posts:read": "project",
     "muse:posts:write": "project",
     "muse:posts:delete": "project",
@@ -198,6 +207,9 @@ ROLE_PERMISSIONS: Final[dict[str, tuple[str, ...]]] = {
         "helios:roles:revoke",
         "helios:invitations:create",
         "helios:invitations:revoke",
+        "helios:external:register",
+        "helios:external:revoke",
+        "helios:external:view",
     ),
     "ADMIN": (
         "athens:project:view",
@@ -220,6 +232,7 @@ ROLE_PERMISSIONS: Final[dict[str, tuple[str, ...]]] = {
         "helios:roles:revoke",
         "helios:invitations:create",
         "helios:invitations:revoke",
+        "helios:external:view",
     ),
     "EDITOR": (
         "athens:project:view",

@@ -31,6 +31,17 @@ def cache(clock: _Clock) -> InMemoryPermissionCache:
     return InMemoryPermissionCache(ttl_ms=60_000, now=clock)
 
 
+@pytest.fixture
+def no_ttl_cache() -> InMemoryPermissionCache:
+    """Default — no TTL. Entries live until explicit invalidation.
+
+    Mirrors the v0.5.0 platform default: the cache is the primary
+    read path for callerHasPermission; entries must outlive the
+    request burst. Mutations invalidate explicitly.
+    """
+    return InMemoryPermissionCache()
+
+
 class TestGetSet:
     async def test_returns_none_on_miss(self, cache: InMemoryPermissionCache) -> None:
         assert await cache.get("user-1", "tenant-1") is None
@@ -119,3 +130,31 @@ class TestTTL:
         assert await cache.get("user-1", "tenant-1") is not None
         clock.advance(60_001)
         assert await cache.get("user-1", "tenant-1") is None
+
+
+class TestNoTTL:
+    """v0.5.0 default: entries live until explicit invalidate.
+
+    The cache is the primary read path for callerHasPermission and we
+    target a 90-98% hit rate; entries must outlive the request burst.
+    """
+
+    async def test_entries_persist_indefinitely_without_ttl(
+        self, no_ttl_cache: InMemoryPermissionCache
+    ) -> None:
+        await no_ttl_cache.set("user-1", "tenant-1", ["helios:members:view"])
+        # Read it back many times — no expiry.
+        for _ in range(10):
+            assert await no_ttl_cache.get("user-1", "tenant-1") == [
+                "helios:members:view"
+            ]
+
+    async def test_write_through_also_no_expiry(
+        self, no_ttl_cache: InMemoryPermissionCache
+    ) -> None:
+        await no_ttl_cache.write_through(
+            "user-1", "tenant-1", ["helios:tenant:transfer"]
+        )
+        assert await no_ttl_cache.get("user-1", "tenant-1") == [
+            "helios:tenant:transfer"
+        ]

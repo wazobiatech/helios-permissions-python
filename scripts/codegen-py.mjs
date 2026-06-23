@@ -109,8 +109,16 @@ w(`# Use Literal[...] at type-check time for closed-union typo detection.`);
 const literalBlock = (name, items) => {
   // Multi-line Literal so each line is <= 100 chars (ruff's default).
   // mypy / pyright parse this identically to a single-line Literal.
-  if (items.length <= 6) {
-    w(`${name} = Literal[${items.map(p => `"${p}"`).join(', ')}]`);
+  //
+  // Wrap when EITHER the single-line form exceeds 100 chars OR the
+  // tuple has > 6 items (any many-item tuple gets unwieldy). The
+  // length check matters because v1.4.0+ added longer perm names
+  // like `helios:external:register` and `athens:team:invite` that
+  // individually push the inline form over 100 chars even for
+  // small tuples.
+  const inlineForm = `${name} = Literal[${items.map(p => `"${p}"`).join(', ')}]`;
+  if (inlineForm.length <= 100 && items.length <= 6) {
+    w(inlineForm);
   } else {
     w(`${name} = Literal[`);
     for (const p of items) {
