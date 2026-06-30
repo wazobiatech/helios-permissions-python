@@ -50,6 +50,12 @@ def test_admin_gets_everything_except_destructive_deletes_and_ownership_transfer
     assert "muse:author:create" in admin_perms
     assert "muse:author:delete" not in admin_perms
     assert "helios:tenant:transfer" not in admin_perms
+    # v1.5.0: legacy `api_keys:manage` is OWNER-only; ADMIN has the split
+    # create/revoke/read perms instead.
+    assert "mercury:api_keys:manage" not in admin_perms
+    assert "mercury:api_keys:create" in admin_perms
+    assert "mercury:api_keys:revoke" in admin_perms
+    assert "mercury:api_keys:read" in admin_perms
 
 
 def test_editor_gets_platform_user_read_write_on_content_services_no_team_mgmt():
@@ -67,12 +73,15 @@ def test_viewer_gets_read_only_across_services():
     viewer_perms = ROLE_PERMISSIONS["VIEWER"]
     assert "athens:project:view" in viewer_perms
     assert "mercury:users:read" in viewer_perms
+    assert "mercury:api_keys:read" in viewer_perms
+    assert "mercury:service_clients:read" in viewer_perms
     assert "muse:blog:read" in viewer_perms
     assert "muse:author:read" in viewer_perms
     assert "muse:blog:create" not in viewer_perms
     assert "muse:author:create" not in viewer_perms
     assert "mercury:users:write" not in viewer_perms
     assert "helios:members:invite" not in viewer_perms
+    assert "mercury:api_keys:manage" not in viewer_perms
 
 
 def test_role_perms_never_include_self_scope():
@@ -277,3 +286,147 @@ def test_is_tenant_grantable_returns_true_for_unknown_perms():
     """
     assert is_tenant_grantable("inventory:items:read") is True
     assert is_tenant_grantable("custom_tenant_perm:foo:bar") is True
+
+
+# =============================================================================
+# v1.5.0 — Mercury perm split, 4-segment names, new self-scope perms
+# =============================================================================
+
+
+def test_self_permissions_v150_includes_new_per_connection_revoke_and_delete_self():
+    """v1.5.0 added 9 new self-scope perms for per-provider connection
+    revoke, OAuth flow self-actions, IMAP self-create, and self-delete."""
+    new_self = {
+        "mercury:user:delete:self",
+        "mercury:connection:read:self",
+        "mercury:connection_slack:phrase_create:self",
+        "mercury:connection_oauth:initiate:self",
+        "mercury:connection_oauth:complete:self",
+        "mercury:connection_slack:revoke:self",
+        "mercury:connection_google:revoke:self",
+        "mercury:connection_imap:revoke:self",
+        "mercury:connection_imap:create:self",
+    }
+    for perm in new_self:
+        assert perm in SELF_PERMISSIONS
+        assert PERM_SCOPE[perm] == "self"
+
+
+def test_self_permissions_tuple_wrapped_to_multiline_v150():
+    """The 12-item self tuple exceeds the > 6 heuristic, so the vendored
+    emitter wraps it to multi-line. The Literal type is semantically
+    identical."""
+    assert len(SELF_PERMISSIONS) == 12
+
+
+def test_four_segment_self_perms_accepted_by_is_permission():
+    """v1.5.0 allows 4-segment perm names like
+    `mercury:connection_slack:revoke:self`. The is_permission type guard
+    must accept them."""
+    assert is_permission("mercury:connection_slack:revoke:self") is True
+    assert is_permission("mercury:connection_oauth:initiate:self") is True
+    assert is_permission("mercury:connection_imap:create:self") is True
+    assert is_permission("mercury:user:delete:self") is True
+
+
+def test_api_keys_manage_is_owner_only_v150():
+    """v1.5.0 removes the legacy umbrella `mercury:api_keys:manage` from
+    ADMIN; OWNER still holds it as the compat umbrella perm."""
+    owner_perms = ROLE_PERMISSIONS["OWNER"]
+    admin_perms = ROLE_PERMISSIONS["ADMIN"]
+    editor_perms = ROLE_PERMISSIONS["EDITOR"]
+    viewer_perms = ROLE_PERMISSIONS["VIEWER"]
+    # OWNER keeps the legacy umbrella perm
+    assert "mercury:api_keys:manage" in owner_perms
+    # Split perms
+    assert "mercury:api_keys:create" in owner_perms
+    assert "mercury:api_keys:revoke" in owner_perms
+    assert "mercury:api_keys:read" in owner_perms
+    # ADMIN no longer has the legacy umbrella; has the split ones
+    assert "mercury:api_keys:manage" not in admin_perms
+    assert "mercury:api_keys:create" in admin_perms
+    assert "mercury:api_keys:revoke" in admin_perms
+    assert "mercury:api_keys:read" in admin_perms
+    # Read-only roles get the read split
+    assert "mercury:api_keys:read" in editor_perms
+    assert "mercury:api_keys:read" in viewer_perms
+    assert "mercury:api_keys:create" not in editor_perms
+    assert "mercury:api_keys:create" not in viewer_perms
+
+
+def test_new_mercury_platform_perms_are_in_perm_scope_v150():
+    """v1.5.0 platform-scope additions: users:batch_read, service_clients:read,
+    auth_config family (apple/oauth/forgot_password create/update/read),
+    connection_oauth:refresh, events:consume."""
+    expected = {
+        "mercury:users:batch_read": "platform",
+        "mercury:service_clients:read": "platform",
+        "mercury:auth_config:read": "platform",
+        "mercury:auth_config_apple:create": "platform",
+        "mercury:auth_config_apple:update": "platform",
+        "mercury:auth_config_oauth:create": "platform",
+        "mercury:auth_config_oauth:update": "platform",
+        "mercury:auth_config_forgot_password:create": "platform",
+        "mercury:auth_config_forgot_password:update": "platform",
+        "mercury:auth_config_forgot_password:read": "platform",
+        "mercury:connection_oauth:refresh": "platform",
+        "mercury:events:consume": "platform",
+    }
+    for perm, scope in expected.items():
+        assert PERM_SCOPE[perm] == scope
+        assert perm in PLATFORM_PERMISSIONS
+
+
+def test_owners_get_new_mercury_platform_perms_v150():
+    owner_perms = ROLE_PERMISSIONS["OWNER"]
+    for perm in (
+        "mercury:users:batch_read",
+        "mercury:service_clients:read",
+        "mercury:auth_config:read",
+        "mercury:connection_oauth:refresh",
+        "mercury:events:consume",
+    ):
+        assert perm in owner_perms, f"OWNER missing {perm}"
+
+
+def test_admins_get_new_mercury_platform_perms_v150():
+    admin_perms = ROLE_PERMISSIONS["ADMIN"]
+    for perm in (
+        "mercury:service_clients:read",
+        "mercury:auth_config:read",
+        "mercury:auth_config_apple:create",
+        "mercury:auth_config_oauth:create",
+        "mercury:auth_config_forgot_password:create",
+        "mercury:connection_oauth:refresh",
+        "mercury:events:consume",
+    ):
+        assert perm in admin_perms, f"ADMIN missing {perm}"
+
+
+def test_editor_and_viewer_get_read_splits_v150():
+    """Read-only roles get the read-split perms only."""
+    for role in ("EDITOR", "VIEWER"):
+        perms = ROLE_PERMISSIONS[role]
+        assert "mercury:api_keys:read" in perms
+        assert "mercury:service_clients:read" in perms
+        # They must NOT have the write-side split perms
+        assert "mercury:api_keys:create" not in perms
+        assert "mercury:api_keys:revoke" not in perms
+        assert "mercury:api_keys:manage" not in perms
+        assert "mercury:events:consume" not in perms
+
+
+def test_role_subset_relation_holds_v150():
+    """OWNER ⊇ ADMIN ⊇ EDITOR ⊇ VIEWER must still hold after the v1.5.0
+    perm additions."""
+    owner = set(ROLE_PERMISSIONS["OWNER"])
+    admin = set(ROLE_PERMISSIONS["ADMIN"])
+    editor = set(ROLE_PERMISSIONS["EDITOR"])
+    viewer = set(ROLE_PERMISSIONS["VIEWER"])
+
+    for p in editor:
+        assert p in admin, f"EDITOR has {p} not in ADMIN"
+    for p in viewer:
+        assert p in editor, f"VIEWER has {p} not in EDITOR"
+    for p in admin:
+        assert p in owner, f"ADMIN has {p} not in OWNER"
