@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GENERATED_FILE = ROOT / "src" / "helios_permissions" / "role_permissions.py"
 CODEGEN_SCRIPT = ROOT / "scripts" / "codegen-py.mjs"
-CONTRACT_VERSION = os.environ.get("PERMISSION_CONTRACT_VERSION", "v1.5.0")
+CONTRACT_VERSION = os.environ.get("PERMISSION_CONTRACT_VERSION", "v1.6.0")
 CONTRACT_URL = (
     f"https://raw.githubusercontent.com/wazobiatech/permission-contract/"
     f"{CONTRACT_VERSION}/permissions.json"

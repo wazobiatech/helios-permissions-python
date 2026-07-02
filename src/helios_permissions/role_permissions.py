@@ -2,7 +2,7 @@
 
 Canonical source of truth for the platform. Generated from the
 language-agnostic JSON contract at `wazobiatech/permission-contract`
-v1.5.0 (generated 2026-06-30). Do NOT edit by hand — edit the
+v1.6.0 (generated 2026-07-02). Do NOT edit by hand — edit the
 contract's `permissions.json` and re-run codegen.
 
 The Helios service imports this module via the published package; Helios
@@ -11,7 +11,7 @@ same JSON contract agree on what OWNER / ADMIN / EDITOR / VIEWER means.
 
 Permission naming convention: `{service}:{resource}:{action}`.
 
-  - service  — one of: athens, mercury, muse, helios
+  - service  — one of: athens, mercury, muse, helios, zeta
   - resource — domain noun (project, users, posts, members, ...)
   - action   — verb (view, write, delete, manage, ...)
 
@@ -101,6 +101,20 @@ PROJECT_PERMISSIONS: Final[tuple[str, ...]] = (
     "muse:posts:delete",
     "muse:drafts:read",
     "muse:drafts:write",
+    "zeta:fines:view",
+    "zeta:fines:create",
+    "zeta:fines:pay",
+    "zeta:fines:challenge",
+    "zeta:fines:assign",
+    "zeta:fleet:view",
+    "zeta:fleet:edit",
+    "zeta:drivers:view",
+    "zeta:drivers:manage",
+    "zeta:reports:view",
+    "zeta:billing:view",
+    "zeta:billing:manage",
+    "zeta:team:manage",
+    "zeta:tenant:configure",
 )
 
 DUAL_PERMISSIONS: Final[tuple[str, ...]] = (
@@ -171,6 +185,20 @@ ProjectPermission = Literal[
     "muse:posts:delete",
     "muse:drafts:read",
     "muse:drafts:write",
+    "zeta:fines:view",
+    "zeta:fines:create",
+    "zeta:fines:pay",
+    "zeta:fines:challenge",
+    "zeta:fines:assign",
+    "zeta:fleet:view",
+    "zeta:fleet:edit",
+    "zeta:drivers:view",
+    "zeta:drivers:manage",
+    "zeta:reports:view",
+    "zeta:billing:view",
+    "zeta:billing:manage",
+    "zeta:team:manage",
+    "zeta:tenant:configure",
 ]
 DualPermission = Literal["muse:author:read"]
 Permission = Literal[SelfPermission | PlatformPermission | ProjectPermission | DualPermission]
@@ -239,6 +267,20 @@ PERM_SCOPE: Final[dict[str, PermScope]] = {
     "muse:posts:delete": "project",
     "muse:drafts:read": "project",
     "muse:drafts:write": "project",
+    "zeta:fines:view": "project",
+    "zeta:fines:create": "project",
+    "zeta:fines:pay": "project",
+    "zeta:fines:challenge": "project",
+    "zeta:fines:assign": "project",
+    "zeta:fleet:view": "project",
+    "zeta:fleet:edit": "project",
+    "zeta:drivers:view": "project",
+    "zeta:drivers:manage": "project",
+    "zeta:reports:view": "project",
+    "zeta:billing:view": "project",
+    "zeta:billing:manage": "project",
+    "zeta:team:manage": "project",
+    "zeta:tenant:configure": "project",
     "muse:author:read": "platform/project",
 }
 

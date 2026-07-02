@@ -7,11 +7,35 @@
 
 | | |
 |---|---|
-| Version | **0.5.0** — no-expiry cache default; codegen'd from `wazobiatech/permission-contract` |
+| Version | **0.7.0** — universal-by-contract short-circuit in `caller_has_permission` (root-tenant safe) |
 | Branch | `feature/ZIN-4901d--helios-permissions-py` |
-| Tests | 87 passing across 6 suites. Plus 2 pre-existing HMAC test failures on `main` (`tests/test_helios_client.py`), unrelated to v0.5.0 — they predate the no-expiry change. |
+| Tests | 105 passing across 6 suites (added 9 short-circuit tests). Plus 2 pre-existing HMAC test failures on `main` (`tests/test_helios_client.py`), unrelated to v0.7.0 — they predate the no-expiry change. |
 | Lint | `ruff check src tests` clean |
-| Contract version | `permission-contract@v1.4.0` (4-scope permission model + `helios:external:*` perms for Use case 2) |
+| Contract version | `permission-contract@v1.6.0` (4-scope model + Mercury v1.5.0 expansion + Zeta v1.6.0) |
+
+## v0.7.0 — universal-by-contract short-circuit
+
+`PermissionClient.caller_has_permission(user_id, tenant_id, perm)`
+short-circuits when `perm` is universal-by-contract — i.e. either
+`self` scope (every authenticated user has it by invariant 8) or
+granted to every role in `ROLE_PERMISSIONS` (OWNER + ADMIN + EDITOR +
+VIEWER). The short-circuit returns `True` without consulting cache or
+Helios.
+
+This fixes a root-tenant dead-end: Mercury's platform admins have no
+Helios membership row (the platform root tenant is not a real tenant),
+so every `caller_has_permission(root_user, root_tenant, perm)`
+previously resolved to `not_a_member` → 403. The contract invariant
+is that these perms are universal; the SDK now honors that without a
+Helios round-trip.
+
+`explain(...)` short-circuits the same way. `get_user_permissions(...)`
+folds `SELF_PERMISSIONS` into the result so callers see a complete
+view regardless of tenant membership.
+
+Adding a perm to all four roles is a deliberate, reviewable contract
+decision — the SDK trusts the contract and short-circuits without
+re-fetching.
 
 ## What this SDK does
 

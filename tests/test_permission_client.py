@@ -85,6 +85,134 @@ class TestCallerHasPermissionHappyPath:
         assert granted is False
 
 
+# --- Self-scope short-circuit ---------------------------------------------
+
+
+class TestCallerHasPermissionSelfScopeShortCircuit:
+    """Self-scope perms (e.g. ``mercury:user:write:self``) are universal by
+    contract — every authenticated user has them regardless of role or
+    tenant membership. The SDK must short-circuit and return True
+    without touching cache or Helios. Critical for root-tenant users
+    (Mercury platform admins) who have no Helios membership row.
+    """
+
+    async def test_returns_true_for_self_scope_perm_and_never_calls_helios(
+        self, client: PermissionClient, helios: MockHeliosClient
+    ) -> None:
+        granted = await client.caller_has_permission(
+            "root-platform-admin",
+            "root-tenant-uuid",
+            "mercury:user:write:self",
+        )
+        assert granted is True
+        assert helios.call_count == 0
+
+    async def test_returns_true_for_self_scope_perm_even_when_helios_would_return_not_a_member(
+        self, client: PermissionClient, helios: MockHeliosClient
+    ) -> None:
+        # Without the short-circuit this would resolve to not_a_member
+        # (root tenant has no Helios row) → False. The short-circuit
+        # ensures the contract is honored.
+        helios.resolutions["root-admin:root-tenant"] = {"status": "not_a_member"}
+        granted = await client.caller_has_permission(
+            "root-admin",
+            "root-tenant",
+            "mercury:connection:read:self",
+        )
+        assert granted is True
+
+    async def test_explain_returns_granted_for_self_scope_perm(
+        self, client: PermissionClient, helios: MockHeliosClient
+    ) -> None:
+        result = await client.explain(
+            "root-admin", "root-tenant", "mercury:user:write:self"
+        )
+        assert result.granted is True
+        assert result.role is None
+        assert result.reason == "granted_by_role"
+        assert helios.call_count == 0
+
+
+# --- Universal-by-role short-circuit --------------------------------------
+
+
+class TestCallerHasPermissionUniversalByRoleShortCircuit:
+    """A perm is 'universal-by-contract' if it appears in EVERY role's
+    ``ROLE_PERMISSIONS`` entry (or is self-scope). The contract author
+    is asserting every authenticated user has it. The SDK short-circuits
+    so root-tenant / tenantless callers aren't 403'd.
+
+    Adding a perm to all four roles is a deliberate, reviewable
+    contract decision — the SDK trusts the contract and short-circuits
+    without re-fetching.
+    """
+
+    async def test_short_circuits_perm_granted_to_all_four_roles(
+        self, client: PermissionClient, helios: MockHeliosClient
+    ) -> None:
+        # mercury:api_keys:read is granted to OWNER+ADMIN+EDITOR+VIEWER.
+        granted = await client.caller_has_permission(
+            "root-admin",
+            "root-tenant",
+            "mercury:api_keys:read",
+        )
+        assert granted is True
+        assert helios.call_count == 0
+
+    async def test_does_not_short_circuit_perm_granted_to_only_some_roles(
+        self, client: PermissionClient, helios: MockHeliosClient
+    ) -> None:
+        # mercury:api_keys:create is OWNER+ADMIN only — not all 4 roles.
+        helios.resolutions["viewer-user:tenant-1"] = {
+            "status": "active",
+            "role": "VIEWER",
+            "permissions": ["mercury:api_keys:read"],
+        }
+        granted = await client.caller_has_permission(
+            "viewer-user",
+            "tenant-1",
+            "mercury:api_keys:create",
+        )
+        assert granted is False  # VIEWER doesn't have create
+        assert helios.call_count == 1  # short-circuit did NOT fire
+
+    async def test_admin_can_create_keys_via_helios_path(
+        self, client: PermissionClient, helios: MockHeliosClient
+    ) -> None:
+        # For perms NOT granted to all roles, the SDK must still consult
+        # Helios. This proves the Helios path remains active for
+        # non-universal perms.
+        helios.resolutions["admin-user:tenant-1"] = {
+            "status": "active",
+            "role": "ADMIN",
+            "permissions": [
+                "mercury:api_keys:create",
+                "mercury:api_keys:revoke",
+                "mercury:api_keys:read",
+            ],
+        }
+        granted = await client.caller_has_permission(
+            "admin-user",
+            "tenant-1",
+            "mercury:api_keys:create",
+        )
+        assert granted is True
+        assert helios.call_count == 1
+
+    async def test_get_user_permissions_folds_in_self_permissions(
+        self, client: PermissionClient, helios: MockHeliosClient, cache: InMemoryPermissionCache
+    ) -> None:
+        # Even when Helios returns nothing (root-tenant not_a_member),
+        # get_user_permissions must include self-scope perms so the
+        # caller sees a complete view.
+        helios.resolutions["root-admin:root-tenant"] = {"status": "not_a_member"}
+        perms = await client.get_user_permissions("root-admin", "root-tenant")
+        # SELF_PERMISSIONS must be present even though the Helios call
+        # returned not_a_member.
+        assert "mercury:user:write:self" in perms
+        assert "mercury:user:read:self" in perms
+
+
 # --- Cache behavior --------------------------------------------------------
 
 

@@ -59,7 +59,43 @@ from .helios.client import (
     HeliosUnreachableError,
 )
 from .logger import Logger, silent_logger
-from .role_permissions import ROLES, Permission
+from .role_permissions import (
+    ROLES,
+    PERM_SCOPE,
+    ROLE_PERMISSIONS,
+    SELF_PERMISSIONS,
+    Permission,
+    is_self_scope,
+)
+
+
+def _is_universal_perm(perm: Permission) -> bool:
+    """``True`` if ``perm`` is universal-by-contract.
+
+    A perm is universal-by-contract — granted to every authenticated
+    caller without consulting Helios — if any of:
+
+      1. The perm is ``self`` scope (universal by invariant 8 of the
+         permission-contract — every authenticated user has these).
+      2. The perm is in every role's role_permissions tuple (granted to
+         OWNER + ADMIN + EDITOR + VIEWER; universal by contract design,
+         regardless of scope).
+
+    Why this exists: Helios stores per-(user, tenant) membership rows.
+    Root-tenant users (Mercury's platform admins) and any other tenantless
+    caller have no row to look up. Without this short-circuit, every
+    ``caller_has_permission`` for a universal perm would resolve to
+    ``not_a_member`` and 403 the caller. The contract invariant is that
+    these perms do NOT depend on tenant membership — they are universal.
+
+    The check trusts the contract: if a perm is in every role's perm
+    array, the contract author intends every authenticated user to have
+    it. Adding a perm to all four roles is a deliberate, reviewable
+    contract decision — the SDK honors it without re-fetching.
+    """
+    if is_self_scope(perm):
+        return True
+    return all(perm in ROLE_PERMISSIONS[role] for role in ROLES)
 
 Reason = Literal[
     "granted_by_role",
@@ -127,6 +163,14 @@ class PermissionClient:
     ) -> bool:
         """``True`` if ``user_id`` is granted ``required_perm`` in ``tenant_id``.
 
+        Universal perms (see :func:`_is_universal_perm`) — self-scope
+        perms or perms granted to every role — short-circuit to ``True``
+        without consulting cache or Helios. This is critical for
+        root-tenant users (Mercury's platform admins) who have no Helios
+        membership row: without the short-circuit, every
+        ``caller_has_permission(root_user, root_tenant, perm)`` would
+        resolve to ``not_a_member`` and deny every universal perm.
+
         Cache-first: a hit returns immediately. On miss, fetches from
         Helios and populates the cache. Concurrent misses for the same
         ``(user_id, tenant_id)`` are coalesced via in-process lock —
@@ -136,6 +180,8 @@ class PermissionClient:
         the client was constructed with ``stale_on_error=False``, in which
         case :class:`HeliosUnreachableError` propagates.
         """
+        if _is_universal_perm(required_perm):
+            return True
         perms = await self._resolve_perms(user_id, tenant_id)
         return required_perm in perms
 
@@ -151,8 +197,17 @@ class PermissionClient:
         Same cache-first behavior as :meth:`caller_has_permission`. An
         empty array means the user is not a member of the tenant (or
         the membership is inactive / past expiry).
+
+        Self-scope perms (e.g. ``mercury:user:write:self``) are universal
+        by contract — every authenticated user has them regardless of
+        role or tenant membership. We always fold ``SELF_PERMISSIONS``
+        into the result so callers see a complete view. Without this,
+        root-tenant users (Mercury's platform admins, who have no
+        Helios membership row) would show an empty perm array even
+        though they can mutate their own profile.
         """
-        return await self._resolve_perms(user_id, tenant_id)
+        role_perms = await self._resolve_perms(user_id, tenant_id)
+        return list(SELF_PERMISSIONS) + role_perms
 
     async def explain(
         self, user_id: str, tenant_id: str, perm: Permission
@@ -163,6 +218,11 @@ class PermissionClient:
         the role, not just the perm array). It's intended for the
         explain endpoint and audit logging — not for hot-path authz.
         """
+        # Universal perms are granted by contract — no Helios lookup needed.
+        if _is_universal_perm(perm):
+            return PermissionExplanation(
+                granted=True, role=None, reason="granted_by_role"
+            )
         try:
             resolution = await self._helios.fetch_user_permissions(user_id, tenant_id)
         except HeliosUnreachableError as err:
