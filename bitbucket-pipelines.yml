@@ -13,7 +13,7 @@ definitions:
           # pinned permission-contract tag. Must run before lint/test
           # because the generated file is the source of truth for the
           # closed Permission Literal type.
-          - PERMISSION_CONTRACT_VERSION=v1.4.0 poetry run codegen
+          - PERMISSION_CONTRACT_VERSION=v1.7.0 poetry run codegen
           - poetry run ruff check src tests
           - poetry run pytest -v
 

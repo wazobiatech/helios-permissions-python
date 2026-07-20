@@ -11,7 +11,7 @@
 | Branch | `feature/ZIN-4901d--helios-permissions-py` |
 | Tests | 105 passing across 6 suites (added 9 short-circuit tests). Plus 2 pre-existing HMAC test failures on `main` (`tests/test_helios_client.py`), unrelated to v0.7.0 — they predate the no-expiry change. |
 | Lint | `ruff check src tests` clean |
-| Contract version | `permission-contract@v1.6.0` (4-scope model + Mercury v1.5.0 expansion + Zeta v1.6.0) |
+| Contract version | `permission-contract@v1.7.0` (4-scope model + Mercury v1.5.0 + Zeta v1.6.0 + Muse v1.7.0) |
 
 ## v0.7.0 — universal-by-contract short-circuit
 
@@ -120,11 +120,11 @@ The `Permission = Literal[...]` type and `ROLE_PERMISSIONS` dict are
    `scripts/codegen-permissions.py` (both must match).
 4. CI runs `poetry run codegen`, then `ruff check`, `pytest`.
 
-Currently pinned to `permission-contract@v1.4.0`, which adds three
-`helios:external:*` permissions (register / revoke / view) for the
-Use case 2 ("tenant brings their own auth") flow. `register` and
-`revoke` are OWNER-only per the contract's `owner_only_permissions`
-invariant; `view` is OWNER+ADMIN.
+Currently pinned to `permission-contract@v1.7.0`, which adds 17 new
+`muse:*` permissions (blog update/delete, author update, tag/category/
+redirect CRUD, redirect analytics, posts:revert) and bumps
+`muse:posts:delete` from project to platform/project. `muse:blog:delete`
+is added to `owner_only_permissions`.
 
 ## Decisions locked
 
@@ -273,7 +273,7 @@ is implemented in helios as ZIN-4901e (`ServicePermissionsController`
 ```bash
 poetry install
 # Codegen requires network — fetches the contract from GitHub.
-PERMISSION_CONTRACT_VERSION=v1.4.0 poetry run codegen
+PERMISSION_CONTRACT_VERSION=v1.7.0 poetry run codegen
 poetry run ruff check src tests   # clean
 poetry run pytest                 # 87/89 pass (2 pre-existing HMAC failures on main, unrelated to v0.5.0)
 poetry run pytest -v              # verbose
