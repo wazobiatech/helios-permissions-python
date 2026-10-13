@@ -48,7 +48,8 @@ def test_admin_gets_everything_except_destructive_deletes_and_ownership_transfer
     assert "athens:project:delete" not in admin_perms
     assert "muse:blog:create" in admin_perms
     assert "muse:author:create" in admin_perms
-    assert "muse:author:delete" not in admin_perms
+    # v1.9.2: muse:author:delete granted to OWNER+ADMIN+EDITOR (matches author:update)
+    assert "muse:author:delete" in admin_perms
     assert "helios:tenant:transfer" not in admin_perms
     # v1.5.0: legacy `api_keys:manage` is OWNER-only; ADMIN has the split
     # create/revoke/read perms instead.
@@ -63,7 +64,7 @@ def test_editor_gets_platform_user_read_write_on_content_services_no_team_mgmt()
     assert "muse:blog:create" in editor_perms
     assert "muse:blog:read" in editor_perms
     assert "muse:author:create" in editor_perms
-    assert "muse:author:delete" not in editor_perms
+    assert "muse:author:delete" in editor_perms  # v1.9.2
     assert "athens:project:update" not in editor_perms
     assert "helios:members:invite" not in editor_perms
     assert "helios:tenant:transfer" not in editor_perms
@@ -131,7 +132,7 @@ def test_role_has_permission_returns_true_when_granted():
 
 def test_role_has_permission_returns_false_when_lacking():
     assert role_has_permission("VIEWER", "helios:tenant:transfer") is False
-    assert role_has_permission("EDITOR", "muse:author:delete") is False
+    assert role_has_permission("EDITOR", "athens:project:update") is False
 
 
 def test_is_permission_accepts_valid_perm_strings():
@@ -179,7 +180,8 @@ def test_perm_scope_contains_every_perm_in_the_contract_vocabulary():
     assert PERM_SCOPE["mercury:user:write:self"] == "self"
     # Platform-scope
     assert PERM_SCOPE["athens:project:view"] == "platform"
-    assert PERM_SCOPE["helios:tenant:transfer"] == "platform"
+    # v1.12.0: helios:* perms are dual-scope (switch:self stays self)
+    assert PERM_SCOPE["helios:tenant:transfer"] == "platform/project"
     # Project-scope
     assert PERM_SCOPE["muse:posts:read"] == "project"
     assert PERM_SCOPE["muse:drafts:write"] == "project"
@@ -277,7 +279,13 @@ def test_is_tenant_grantable_returns_false_for_self_perms():
 
 def test_is_tenant_grantable_returns_false_for_platform_only_perms():
     assert is_tenant_grantable("athens:project:view") is False
-    assert is_tenant_grantable("helios:tenant:transfer") is False
+    assert is_tenant_grantable("mercury:api_keys:create") is False
+
+
+def test_is_tenant_grantable_true_for_helios_perms_since_v1_12_0():
+    assert is_tenant_grantable("helios:tenant:transfer") is True
+    assert is_tenant_grantable("helios:roles:assign") is True
+    assert is_tenant_grantable("helios:external:register") is True
 
 
 def test_is_tenant_grantable_returns_true_for_unknown_perms():
